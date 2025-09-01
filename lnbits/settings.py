@@ -15,7 +15,8 @@ from typing import Any
 from uuid import uuid4
 
 from loguru import logger
-from pydantic import BaseModel, BaseSettings, Extra, Field, validator
+from pydantic import BaseModel, Extra, Field, validator
+from pydantic_settings import BaseSettings
 
 
 def list_parse_fallback(v: str):
@@ -1038,11 +1039,12 @@ class ReadOnlySettings(
 
 
 class Settings(EditableSettings, ReadOnlySettings, TransientSettings, BaseSettings):
-    class Config:
-        env_file = ".env"
-        env_file_encoding = "utf-8"
-        case_sensitive = False
-        json_loads = list_parse_fallback
+    model_config = {
+        "env_file": ".env",
+        "env_file_encoding": "utf-8",
+        "case_sensitive": False,
+        "extra": "allow"
+    }
 
     def is_user_allowed(self, user_id: str) -> bool:
         return (
@@ -1106,7 +1108,10 @@ settings = Settings()
 
 settings.lnbits_path = str(path.dirname(path.realpath(__file__)))
 
-settings.version = importlib.metadata.version("lnbits")
+try:
+    settings.version = importlib.metadata.version("lnbits")
+except importlib.metadata.PackageNotFoundError:
+    settings.version = "dev"
 
 settings.check_auth_secret_key()
 
