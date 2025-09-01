@@ -933,6 +933,10 @@ class MultiUserNWCWallet(Wallet):
                                         "user_pubkey": user_pubkey,
                                         "checking_id": payment["checking_id"]
                                     })
+                                    
+                                    # Check if this is a subscription invoice and handle fee splitting
+                                    await self._handle_subscription_invoice_payment(payment["checking_id"], user_pubkey)
+                                    
                         except Exception as e:
                             logger.error(f"Error handling pending payment for user {user_pubkey}: {str(e)}")
                         
@@ -953,6 +957,137 @@ class MultiUserNWCWallet(Wallet):
                     
                 except Exception as e:
                     logger.error(f"Error handling pending payments for user {user_pubkey}: {str(e)}")
+
+    async def _handle_subscription_invoice_payment(self, payment_hash: str, user_pubkey: str):
+        """Handle subscription invoice payment and perform fee splitting using internal transfer"""
+        try:
+            from lnbits.core.db import db
+            from lnbits.core.services.payments import update_wallet_balance
+            from lnbits.core.crud import get_wallet, get_user_nwc_config_by_pubkey
+            from datetime import datetime, timezone
+            
+            # Check if this is a subscription invoice
+            subscription_invoice = await db.fetchone(
+                "SELECT * FROM subscription_invoices WHERE payment_hash = ? AND status = 'pending'",
+                (payment_hash,)
+            )
+            
+            if not subscription_invoice:
+                # Not a subscription invoice, nothing to do
+                return
+            
+            logger.info(f"Processing subscription invoice payment: {payment_hash}")
+            
+            # Get fee amount and admin address
+            fee_amount = subscription_invoice["fee_amount"]
+            admin_address = subscription_invoice["admin_address"]
+            
+            if fee_amount > 0:
+                try:
+                    # Find admin wallet by address
+                    admin_wallet = await get_wallet(admin_address)
+                    
+                    if not admin_wallet:
+                        # Admin wallet not found, mark as failed
+                        await db.execute(
+                            "UPDATE subscription_invoices SET status = 'failed', error_message = ? WHERE payment_hash = ?",
+                            (f"Admin wallet {admin_address} not found", payment_hash)
+                        )
+                        logger.error(f"Admin wallet {admin_address} not found for payment {payment_hash}")
+                        return
+                    
+                    # Find user wallet through NWC config
+                    user_nwc_config = await get_user_nwc_config_by_pubkey(user_pubkey)
+                    if not user_nwc_config:
+                        await db.execute(
+                            "UPDATE subscription_invoices SET status = 'failed', error_message = ? WHERE payment_hash = ?",
+                            (f"User NWC config not found for pubkey {user_pubkey}", payment_hash)
+                        )
+                        logger.error(f"User NWC config not found for pubkey {user_pubkey}")
+                        return
+                    
+                    # Get user wallet
+                    user_wallet = await get_wallet(user_nwc_config["user_id"])
+                    if not user_wallet:
+                        await db.execute(
+                            "UPDATE subscription_invoices SET status = 'failed', error_message = ? WHERE payment_hash = ?",
+                            (f"User wallet not found for user {user_nwc_config['user_id']}", payment_hash)
+                        )
+                        logger.error(f"User wallet not found for user {user_nwc_config['user_id']}")
+                        return
+                    
+                    # Convert fee_amount from msats to sats for update_wallet_balance
+                    fee_amount_sats = fee_amount // 1000
+                    
+                    # Use database transaction to ensure atomicity
+                    async with db.connect() as conn:
+                        # Check if user has sufficient balance
+                        if user_wallet.balance < fee_amount_sats:
+                            await db.execute(
+                                "UPDATE subscription_invoices SET status = 'failed', error_message = ? WHERE payment_hash = ?",
+                                (f"Insufficient balance in user wallet. Required: {fee_amount_sats}, Available: {user_wallet.balance}", payment_hash)
+                            )
+                            logger.error(f"Insufficient balance in user wallet {user_wallet.id}. Required: {fee_amount_sats}, Available: {user_wallet.balance}")
+                            return
+                        
+                        # 1. Deduct fee from user wallet
+                        await update_wallet_balance(
+                            wallet=user_wallet, 
+                            amount=-fee_amount_sats,  # Negative amount to deduct
+                            conn=conn
+                        )
+                        
+                        # 2. Credit fee to admin wallet
+                        await update_wallet_balance(
+                            wallet=admin_wallet, 
+                            amount=fee_amount_sats,  # Positive amount to credit
+                            conn=conn
+                        )
+                        
+                        # 3. Update subscription invoice status
+                        await db.execute(
+                            "UPDATE subscription_invoices SET status = 'paid', paid_at = ? WHERE payment_hash = ?",
+                            (datetime.now(timezone.utc).isoformat(), payment_hash),
+                            conn=conn
+                        )
+                        
+                        await db.execute(
+                            "UPDATE subscription_invoices SET status = 'fee_sent', fee_sent_at = ? WHERE payment_hash = ?",
+                            (datetime.now(timezone.utc).isoformat(), payment_hash),
+                            conn=conn
+                        )
+                        
+                        logger.info(f"Fee transfer completed: {fee_amount} msats from user wallet {user_wallet.id} to admin wallet {admin_address} for payment {payment_hash}")
+                        
+                except Exception as e:
+                    # Internal transfer failed
+                    await db.execute(
+                        "UPDATE subscription_invoices SET status = 'failed', error_message = ? WHERE payment_hash = ?",
+                        (f"Internal transfer failed: {str(e)}", payment_hash)
+                    )
+                    logger.error(f"Failed to transfer fee for payment {payment_hash}: {e}")
+            else:
+                # No fee to send, just mark as paid and completed
+                await db.execute(
+                    "UPDATE subscription_invoices SET status = 'paid', paid_at = ? WHERE payment_hash = ?",
+                    (datetime.now(timezone.utc).isoformat(), payment_hash)
+                )
+                await db.execute(
+                    "UPDATE subscription_invoices SET status = 'completed', completed_at = ? WHERE payment_hash = ?",
+                    (datetime.now(timezone.utc).isoformat(), payment_hash)
+                )
+                logger.info(f"Subscription invoice {payment_hash} completed with no fee")
+            
+        except Exception as e:
+            logger.error(f"Error handling subscription invoice payment {payment_hash}: {e}")
+            try:
+                from lnbits.core.db import db
+                await db.execute(
+                    "UPDATE subscription_invoices SET status = 'failed', error_message = ? WHERE payment_hash = ?",
+                    (str(e), payment_hash)
+                )
+            except:
+                pass
 
     async def cleanup(self):
         """Cleanup resources"""

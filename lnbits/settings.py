@@ -564,6 +564,8 @@ class LnTipsFundingSource(LNbitsSettings):
 
 class NWCFundingSource(LNbitsSettings):
     nwc_pairing_url: str | None = Field(default=None)
+    nwc_admin_address: str | None = Field(default=None)  # Admin address for fee collection
+    nwc_default_fee_percentage: int = Field(default=10)  # Default fee percentage for subscription invoices
 
 
 class BreezSdkFundingSource(LNbitsSettings):

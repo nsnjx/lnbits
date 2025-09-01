@@ -47,10 +47,9 @@ def get_funding_source() -> Wallet:
     return funding_source
 
 
-wallets_module = importlib.import_module("lnbits.wallets")
+# initialize as fake wallet
 fake_wallet = FakeWallet()
 
-# initialize as fake wallet
 funding_source: Wallet = fake_wallet
 
 
