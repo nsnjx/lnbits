@@ -326,3 +326,22 @@ class DeleteTokenRequest(BaseModel):
     id: str
     acl_id: str
     password: str
+
+
+class UserNWCConfig(BaseModel):
+    """User NWC configuration for multi-user NWC support"""
+    id: str
+    user_id: str
+    pubkey: str
+    secret: str
+    relay: str
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    
+    def validate_fields(self):
+        if not is_valid_pubkey(self.pubkey):
+            raise ValueError("Invalid pubkey.")
+        if len(self.secret) != 64:  # 32 bytes hex
+            raise ValueError("Invalid secret length.")
+        if not self.relay.startswith(("ws://", "wss://")):
+            raise ValueError("Invalid relay URL.")
