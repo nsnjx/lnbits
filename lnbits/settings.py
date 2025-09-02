@@ -1038,12 +1038,11 @@ class ReadOnlySettings(
 
 
 class Settings(EditableSettings, ReadOnlySettings, TransientSettings, BaseSettings):
-    model_config = {
-        "env_file": ".env",
-        "env_file_encoding": "utf-8",
-        "case_sensitive": False,
-        "extra": "allow"
-    }
+    class Config:
+        env_file = ".env"
+        env_file_encoding = "utf-8"
+        case_sensitive = False
+        json_loads = list_parse_fallback
 
     def is_user_allowed(self, user_id: str) -> bool:
         return (
@@ -1107,10 +1106,7 @@ settings = Settings()
 
 settings.lnbits_path = str(path.dirname(path.realpath(__file__)))
 
-try:
-    settings.version = importlib.metadata.version("lnbits")
-except importlib.metadata.PackageNotFoundError:
-    settings.version = "dev"
+settings.version = importlib.metadata.version("lnbits")
 
 settings.check_auth_secret_key()
 
