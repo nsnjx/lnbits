@@ -6,7 +6,6 @@ Handles NWC protocol events and implements custom methods like get_nwc_uri
 import asyncio
 import json
 import time
-from datetime import datetime, timezone
 from typing import Dict, Any, Optional
 from loguru import logger
 
@@ -32,7 +31,6 @@ class NWCServer:
             "get_info",
             "get_nwc_uri",  # Custom method for getting user's NWC URI
             "make_invoice",
-            "make_subscription_invoice",  # Custom method for subscription invoices with fee splitting
             "pay_invoice",
             "lookup_invoice",
             "get_balance",
@@ -93,8 +91,6 @@ class NWCServer:
                 return await self._handle_get_info(event, service_pubkey)
             elif method == "make_invoice":
                 return await self._handle_make_invoice(event, service_pubkey, params)
-            elif method == "make_subscription_invoice":
-                return await self._handle_make_subscription_invoice(event, service_pubkey, params)
             elif method == "pay_invoice":
                 return await self._handle_pay_invoice(event, service_pubkey, params)
             elif method == "lookup_invoice":
@@ -239,158 +235,6 @@ class NWCServer:
             "make_invoice",
             {"payment_hash": "placeholder", "invoice": "placeholder"}
         )
-    
-    async def _handle_make_subscription_invoice(self, event: Dict[str, Any], service_pubkey: str, params: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Handle make_subscription_invoice method - create invoice with automatic fee splitting
-        
-        Args:
-            event: The original request event
-            service_pubkey: The service public key
-            params: Method parameters including fee, amount, description, etc.
-            
-        Returns:
-            Response event with subscription invoice details
-        """
-        try:
-            # Extract user pubkey from the event author
-            user_pubkey = event.get("pubkey")
-            if not user_pubkey:
-                return self._create_error_response(
-                    event["id"], 
-                    service_pubkey, 
-                    "INVALID_REQUEST", 
-                    "No user pubkey found"
-                )
-            
-            # Validate required parameters
-            amount = params.get("amount")
-            # Get fee percentage from settings instead of params
-            fee_percentage = getattr(settings, 'nwc_default_fee_percentage', 10)
-            
-            if not amount or amount <= 0:
-                return self._create_error_response(
-                    event["id"], 
-                    service_pubkey, 
-                    "INVALID_PARAMS", 
-                    "Amount must be a positive number"
-                )
-            
-            if not (0 <= fee_percentage <= 100):
-                return self._create_error_response(
-                    event["id"], 
-                    service_pubkey, 
-                    "CONFIG_ERROR", 
-                    f"Invalid fee percentage in configuration: {fee_percentage}%"
-                )
-            
-            # Check if admin address is configured
-            admin_address = getattr(settings, 'nwc_admin_address', None)
-            if not admin_address:
-                return self._create_error_response(
-                    event["id"], 
-                    service_pubkey, 
-                    "CONFIG_ERROR", 
-                    "Admin address not configured"
-                )
-            
-            # Get user's NWC connection
-            from lnbits.wallets.nwc import MultiUserNWCWallet
-            wallet = MultiUserNWCWallet()
-            
-            # Create the main invoice
-            description = params.get("description", f"Subscription payment (fee: {fee_percentage}%)")
-            description_hash = params.get("description_hash")
-            expiry = params.get("expiry", 3600)  # Default 1 hour
-            
-            # Create invoice through user's NWC connection
-            invoice_response = await wallet.create_invoice(
-                amount=amount,
-                user_pubkey=user_pubkey,
-                memo=description,
-                description_hash=bytes.fromhex(description_hash) if description_hash else None,
-                unhashed_description=description.encode() if description else None
-            )
-            
-            if not invoice_response.ok:
-                return self._create_error_response(
-                    event["id"], 
-                    service_pubkey, 
-                    "INVOICE_CREATION_FAILED", 
-                    invoice_response.error_message or "Failed to create invoice"
-                )
-            
-            # Store subscription invoice metadata for fee splitting
-            await self._store_subscription_invoice_metadata(
-                payment_hash=invoice_response.checking_id,
-                user_pubkey=user_pubkey,
-                amount=amount,
-                fee_percentage=fee_percentage,
-                admin_address=admin_address,
-                description=description
-            )
-            
-            # Return success response
-            return self._create_success_response(
-                event["id"],
-                service_pubkey,
-                "make_subscription_invoice",
-                {
-                    "payment_hash": invoice_response.checking_id,
-                    "invoice": invoice_response.payment_request,
-                    "fee_percentage": fee_percentage,
-                    "fee_amount": int(amount * fee_percentage / 100),
-                    "net_amount": int(amount * (100 - fee_percentage) / 100),
-                    "admin_address": admin_address
-                }
-            )
-            
-        except Exception as e:
-            logger.error(f"Error in make_subscription_invoice: {e}")
-            return self._create_error_response(
-                event["id"], 
-                service_pubkey, 
-                "INTERNAL_ERROR", 
-                "Internal server error"
-            )
-    
-    async def _store_subscription_invoice_metadata(
-        self,
-        payment_hash: str,
-        user_pubkey: str,
-        amount: int,
-        fee_percentage: int,
-        admin_address: str,
-        description: str
-    ) -> None:
-        """Store subscription invoice metadata for fee splitting"""
-        try:
-            from lnbits.core.db import db
-            from uuid import uuid4
-            
-            fee_amount = int(amount * fee_percentage / 100)
-            net_amount = amount - fee_amount
-            
-            metadata = {
-                "id": str(uuid4()),
-                "payment_hash": payment_hash,
-                "user_pubkey": user_pubkey,
-                "amount": amount,
-                "fee_percentage": fee_percentage,
-                "fee_amount": fee_amount,
-                "net_amount": net_amount,
-                "admin_address": admin_address,
-                "description": description,
-                "status": "pending",
-                "created_at": datetime.now(timezone.utc).isoformat()
-            }
-            
-            await db.insert("subscription_invoices", metadata)
-            logger.info(f"Stored subscription invoice metadata for {payment_hash}")
-            
-        except Exception as e:
-            logger.error(f"Failed to store subscription invoice metadata: {e}")
-            raise
     
     async def _handle_pay_invoice(self, event: Dict[str, Any], service_pubkey: str, params: Dict[str, Any]) -> Dict[str, Any]:
         """Handle pay_invoice method"""
