@@ -53,6 +53,8 @@ dependencies = [
     "nostr-sdk==0.42.1",
     "bcrypt==4.3.0",
     "jsonpath-ng==1.7.0",
+    "greenlet (>=3.2.4,<4.0.0)",
+    "socksio (>=1.0.0,<2.0.0)",
 ]
 
 [project.scripts]
