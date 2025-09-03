@@ -93,11 +93,15 @@ class HubWallet(Wallet):
     ) -> InvoiceResponse:
         """Create a Lightning invoice"""
         try:
-            # Convert msats to sats
-            amount_sats = amount // 1000
+            # LNbits passes amount in sats, but Hub expects msats
+            # Convert sats to msats
+            amount_sats = max(1, amount)
+            amount_msats = amount_sats * 1000
+            
+            logger.debug(f"Creating invoice: {amount} sats -> {amount_msats} msats for Hub")
             
             payload = {
-                "amount": amount_sats,
+                "amount": amount_msats,
                 "description": memo or "",
             }
             
@@ -228,10 +232,48 @@ class HubWallet(Wallet):
             return PaymentFailedStatus()
 
     async def paid_invoices_stream(self) -> AsyncGenerator[str, None]:
-        """Stream of paid invoices - not implemented for Hub"""
-        # Hub doesn't support streaming, so we just yield nothing
-        # In a real implementation, you might want to poll the API periodically
+        """Stream of paid invoices - polls Hub API for new payments"""
+        last_checked = {}  # Track last checked timestamp per wallet
+        
         while settings.lnbits_running:
-            await asyncio.sleep(1)
-            # Could implement polling here if needed
-            yield ""
+            try:
+                # Poll every 5 seconds for new payments
+                await asyncio.sleep(5)
+                
+                # Get all transactions from Hub
+                r = await self.client.get("/api/transactions")
+                r.raise_for_status()
+                
+                data = r.json()
+                transactions = data.get("transactions", [])
+                
+                # Debug: log transaction structure for first few calls
+                if len(transactions) > 0:
+                    logger.debug(f"Hub returned {len(transactions)} transactions")
+                    if len(transactions) > 0:
+                        logger.debug(f"Sample transaction: {transactions[0]}")
+                
+                # Check for new settled payments
+                for tx in transactions:
+                    if tx.get("state") == "settled" and tx.get("type") == "incoming":
+                        payment_hash = tx.get("paymentHash")
+                        if payment_hash:
+                            # Check if this is a new payment we haven't seen before
+                            wallet_id = getattr(self, 'wallet_id', 'default')
+                            last_timestamp = last_checked.get(wallet_id, 0)
+                            
+                            # Convert timestamp to int if it's a string
+                            tx_timestamp = tx.get("createdAt", 0)
+                            if isinstance(tx_timestamp, str):
+                                try:
+                                    tx_timestamp = int(tx_timestamp)
+                                except (ValueError, TypeError):
+                                    tx_timestamp = 0
+                            
+                            if tx_timestamp > last_timestamp:
+                                last_checked[wallet_id] = tx_timestamp
+                                yield payment_hash
+                                
+            except Exception as exc:
+                logger.warning(f"Error polling Hub for payments: {exc}")
+                await asyncio.sleep(15)  # Wait longer on error
