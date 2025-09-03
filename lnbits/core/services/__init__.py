@@ -27,6 +27,7 @@ from .settings import (
     check_webpush_settings,
     update_cached_settings,
 )
+from .split_payment import wait_for_split_payments
 from .users import (
     check_admin_settings,
     create_user_account,
@@ -67,6 +68,7 @@ __all__ = [
     "update_user_account",
     "update_user_extensions",
     "update_wallet_balance",
+    "wait_for_split_payments",
     "websocket_manager",
     "websocket_updater",
 ]

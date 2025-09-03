@@ -58,7 +58,7 @@ from .commands import migrate_databases
 from .core import init_core_routers
 from .core.db import core_app_extra
 from .core.models.extensions import Extension, ExtensionMeta, InstallableExtension
-from .core.services import check_admin_settings, check_webpush_settings
+from .core.services import check_admin_settings, check_webpush_settings, wait_for_split_payments
 from .middleware import (
     AuditMiddleware,
     ExtensionsRedirectMiddleware,
@@ -486,3 +486,6 @@ def register_async_tasks() -> None:
     if settings.lnbits_admin_ui:
         server_log_task = initialize_server_websocket_logger()
         create_permanent_task(server_log_task)
+    
+    # split payment listener
+    create_permanent_task(wait_for_split_payments)
