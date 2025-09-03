@@ -596,6 +596,11 @@ class StrikeFundingSource(LNbitsSettings):
     strike_api_key: str | None = Field(default=None, env="STRIKE_API_KEY")
 
 
+class HubFundingSource(LNbitsSettings):
+    hub_api_endpoint: str | None = Field(default=None, env="HUB_API_ENDPOINT")
+    hub_api_key: str | None = Field(default=None, env="HUB_API_KEY")
+
+
 class FiatProviderLimits(BaseModel):
     # empty list means all users are allowed to receive payments via Stripe
     allowed_users: list[str] = Field(default=[])
@@ -650,6 +655,7 @@ class FundingSourcesSettings(
     NWCFundingSource,
     BreezSdkFundingSource,
     StrikeFundingSource,
+    HubFundingSource,
     BreezLiquidSdkFundingSource,
 ):
     lnbits_backend_wallet_class: str = Field(default="VoidWallet")
