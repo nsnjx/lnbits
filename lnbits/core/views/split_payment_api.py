@@ -98,12 +98,10 @@ async def create_split_payment(
                             detail=f"Invalid wallet '{target.wallet}'"
                         )
                 
-                # Prevent splitting to self
+                # Skip if it's the same as source wallet (no need to transfer to self)
                 if wallet.id == source_wallet.wallet.id:
-                    raise HTTPException(
-                        status_code=HTTPStatus.BAD_REQUEST,
-                        detail="Cannot split payment to the same wallet"
-                    )
+                    logger.info(f"Skipping target wallet {wallet.id} as it's the same as source wallet")
+                    continue
                 
                 # Use wallet ID for internal wallets
                 validated_target = SplitTarget(
@@ -116,6 +114,13 @@ async def create_split_payment(
                 validated_target = target
             
             validated_targets.append(validated_target)
+        
+        # Check if we have any valid targets after filtering
+        if not validated_targets:
+            raise HTTPException(
+                status_code=HTTPStatus.BAD_REQUEST,
+                detail="No valid target wallets found (all targets are the same as source wallet)"
+            )
         
         # Create the main invoice
         memo = request.memo or f"Split payment: {total_percent}% to {len(validated_targets)} targets"
