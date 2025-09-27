@@ -55,6 +55,7 @@ dependencies = [
     "jsonpath-ng==1.7.0",
     "greenlet (>=3.2.4,<4.0.0)",
     "socksio (>=1.0.0,<2.0.0)",
+    "python-socks (>=2.7.2,<3.0.0)",
 ]
 
 [project.scripts]

@@ -15,6 +15,68 @@ from lnbits.tasks import register_invoice_listener
 from loguru import logger
 
 
+def calculate_priority_split(payment_amount_msat: int, targets: list, fee_percent: float = 10.0) -> list:
+    """
+    Calculate priority-based split distribution
+    
+    Args:
+        payment_amount_msat: Total payment amount in msat
+        targets: List of split targets with priority info
+        fee_percent: Fee percentage (default 10%)
+    
+    Returns:
+        List of processed targets with actual amounts
+    """
+    total_amount_sats = payment_amount_msat // 1000
+    # Use more precise calculation for small amounts
+    fee_amount_msat = int(payment_amount_msat * fee_percent / 100)
+    fee_amount_sats = fee_amount_msat // 1000
+    available_amount_sats = total_amount_sats - fee_amount_sats
+    
+    # Sort by priority: recipient > admin
+    priority_order = {"recipient": 1, "admin": 2}
+    sorted_targets = sorted(targets, key=lambda x: priority_order.get(x.get("priority", "admin"), 2))
+    
+    results = []
+    remaining_amount = available_amount_sats
+    
+    logger.info(f"split_payment: total={total_amount_sats}sats, fee={fee_amount_sats}sats, available={available_amount_sats}sats")
+    
+    for target in sorted_targets:
+        percent = target.get("percent", 0)
+        priority = target.get("priority", "admin")
+        
+        if percent <= 0:
+            continue
+            
+        # Calculate theoretical amount
+        theoretical_amount = int(total_amount_sats * percent / 100)
+        
+        # Allocate based on priority and remaining amount
+        if priority == "recipient":
+            # Priority: give to recipient first
+            actual_amount = min(theoretical_amount, remaining_amount)
+        else:
+            # Admin gets remaining amount
+            actual_amount = remaining_amount
+            
+        if actual_amount > 0:
+            results.append({
+                **target,
+                "theoretical_amount_sats": theoretical_amount,
+                "actual_amount_sats": actual_amount,
+                "actual_amount_msat": actual_amount * 1000
+            })
+            remaining_amount -= actual_amount
+            
+            logger.info(f"split_payment: {target.get('wallet', 'unknown')} "
+                       f"priority={priority} "
+                       f"theoretical={theoretical_amount}sats "
+                       f"actual={actual_amount}sats")
+    
+    return results
+
+
 async def wait_for_split_payments():
     """Wait for paid invoices and process split payments"""
     invoice_queue = asyncio.Queue()
@@ -45,59 +107,61 @@ async def on_split_payment_paid(payment: Payment) -> None:
     
     logger.info(f"split_payment: processing split payment {payment.payment_hash} to {len(split_targets)} targets")
     
-    # Process each target
-    for target in split_targets:
-        percent = target.get("percent", 0)
-        if percent > 0:
-            amount_msat = int(payment.amount * percent / 100)
-            amount_sats = amount_msat // 1000
+    # Calculate priority-based split distribution
+    split_results = calculate_priority_split(payment.amount, split_targets)
+    
+    # Process each target with calculated amounts
+    for result in split_results:
+        target_wallet = result.get("wallet")
+        target_alias = result.get("alias", target_wallet)
+        actual_amount_sats = result.get("actual_amount_sats", 0)
+        theoretical_amount_sats = result.get("theoretical_amount_sats", 0)
+        priority = result.get("priority", "admin")
+        
+        if actual_amount_sats > 0:
+            memo = (
+                f"Split payment: {actual_amount_sats}sats "
+                f"for {target_alias} (priority: {priority})"
+                f";{payment.memo};{payment.payment_hash}"
+            )
             
-            if amount_sats > 0:
-                target_wallet = target.get("wallet")
-                target_alias = target.get("alias", target_wallet)
-                
-                memo = (
-                    f"Split payment: {percent}% "
-                    f"for {target_alias}"
-                    f";{payment.memo};{payment.payment_hash}"
-                )
-                
-                try:
-                    if "@" in target_wallet or "LNURL" in target_wallet:
-                        # External payment via LNURL
-                        safe_amount_msat = amount_msat - fee_reserve(amount_msat)
-                        payment_request = await get_lnurl_invoice(
-                            target_wallet, payment.wallet_id, safe_amount_msat, memo
-                        )
-                    else:
-                        # Internal payment
-                        wallet = await get_wallet_for_key(target_wallet)
-                        if wallet is not None:
-                            target_wallet = wallet.id
-                        
-                        new_payment = await create_invoice(
-                            wallet_id=target_wallet,
-                            amount=amount_sats,
-                            internal=True,
-                            memo=memo,
-                        )
-                        payment_request = new_payment.bolt11
+            try:
+                if "@" in target_wallet or "LNURL" in target_wallet:
+                    # External payment via LNURL
+                    actual_amount_msat = actual_amount_sats * 1000
+                    safe_amount_msat = actual_amount_msat - fee_reserve(actual_amount_msat)
+                    payment_request = await get_lnurl_invoice(
+                        target_wallet, payment.wallet_id, safe_amount_msat, memo
+                    )
+                else:
+                    # Internal payment
+                    wallet = await get_wallet_for_key(target_wallet)
+                    if wallet is not None:
+                        target_wallet = wallet.id
                     
-                    extra = {**payment.extra, "splitted": True, "split_from": payment.payment_hash}
-                    
-                    if payment_request:
-                        task = asyncio.create_task(
-                            pay_invoice_in_background(
-                                payment_request=payment_request,
-                                wallet_id=payment.wallet_id,
-                                description=memo,
-                                extra=extra,
-                            )
-                        )
-                        task.add_done_callback(lambda fut: logger.success(fut.result()))
+                    new_payment = await create_invoice(
+                        wallet_id=target_wallet,
+                        amount=actual_amount_sats,
+                        internal=True,
+                        memo=memo,
+                    )
+                    payment_request = new_payment.bolt11
                 
-                except Exception as e:
-                    logger.error(f"Failed to process split payment to {target_wallet}: {e}")
+                extra = {**payment.extra, "splitted": True, "split_from": payment.payment_hash}
+                
+                if payment_request:
+                    task = asyncio.create_task(
+                        pay_invoice_in_background(
+                            payment_request=payment_request,
+                            wallet_id=payment.wallet_id,
+                            description=memo,
+                            extra=extra,
+                        )
+                    )
+                    task.add_done_callback(lambda fut: logger.success(fut.result()))
+            
+            except Exception as e:
+                logger.error(f"Failed to process split payment to {target_wallet}: {e}")
 
 
 async def pay_invoice_in_background(payment_request: str, wallet_id: str, description: str, extra: dict):

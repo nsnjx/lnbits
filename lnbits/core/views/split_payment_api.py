@@ -98,10 +98,9 @@ async def create_split_payment(
                             detail=f"Invalid wallet '{target.wallet}'"
                         )
                 
-                # Skip if it's the same as source wallet (no need to transfer to self)
+                # Allow same wallet but log a warning
                 if wallet.id == source_wallet.wallet.id:
-                    logger.info(f"Skipping target wallet {wallet.id} as it's the same as source wallet")
-                    continue
+                    logger.warning(f"Target wallet {wallet.id} is the same as source wallet - this will create a self-payment")
                 
                 # Use wallet ID for internal wallets
                 validated_target = SplitTarget(
@@ -115,11 +114,11 @@ async def create_split_payment(
             
             validated_targets.append(validated_target)
         
-        # Check if we have any valid targets after filtering
+        # Check if we have any valid targets
         if not validated_targets:
             raise HTTPException(
                 status_code=HTTPStatus.BAD_REQUEST,
-                detail="No valid target wallets found (all targets are the same as source wallet)"
+                detail="No valid target wallets found"
             )
         
         # Create the main invoice
