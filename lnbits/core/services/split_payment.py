@@ -33,9 +33,8 @@ def calculate_priority_split(payment_amount_msat: int, targets: list, fee_percen
     fee_amount_sats = fee_amount_msat // 1000
     available_amount_sats = total_amount_sats - fee_amount_sats
     
-    # Sort by priority: recipient > admin
-    priority_order = {"recipient": 1, "admin": 2}
-    sorted_targets = sorted(targets, key=lambda x: priority_order.get(x.get("priority", "admin"), 2))
+    # Sort by priority: lower number = higher priority
+    sorted_targets = sorted(targets, key=lambda x: x.get("priority", 1))
     
     results = []
     remaining_amount = available_amount_sats
@@ -53,11 +52,11 @@ def calculate_priority_split(payment_amount_msat: int, targets: list, fee_percen
         theoretical_amount = int(total_amount_sats * percent / 100)
         
         # Allocate based on priority and remaining amount
-        if priority == "recipient":
-            # Priority: give to recipient first
+        if priority == 0:  # Highest priority
+            # Priority: give to highest priority first
             actual_amount = min(theoretical_amount, remaining_amount)
         else:
-            # Admin gets remaining amount
+            # Lower priority gets remaining amount
             actual_amount = remaining_amount
             
         if actual_amount > 0:
