@@ -49,6 +49,31 @@ def main(
     set_cli_settings(host=host, port=port, forwarded_allow_ips=forwarded_allow_ips)
 
     while True:
+        # Custom log config to reduce noise
+        log_config = {
+            "version": 1,
+            "disable_existing_loggers": False,
+            "formatters": {
+                "default": {
+                    "format": "%(asctime)s | %(levelname)s | %(message)s",
+                },
+            },
+            "handlers": {
+                "default": {
+                    "formatter": "default",
+                    "class": "logging.StreamHandler",
+                    "stream": "ext://sys.stdout",
+                },
+            },
+            "loggers": {
+                "uvicorn.access": {
+                    "handlers": ["default"],
+                    "level": "WARNING",  # Only show warnings and errors
+                    "propagate": False,
+                },
+            },
+        }
+        
         config = uvicorn.Config(
             "lnbits.__main__:app",
             loop="uvloop",
@@ -58,7 +83,7 @@ def main(
             ssl_keyfile=ssl_keyfile,
             ssl_certfile=ssl_certfile,
             reload=reload or False,
-            access_log=False,  # Disable access logs to reduce noise
+            log_config=log_config,
         )
 
         server = uvicorn.Server(config=config)

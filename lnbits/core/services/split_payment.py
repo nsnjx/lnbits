@@ -91,10 +91,9 @@ async def on_split_payment_paid(payment: Payment) -> None:
     
     logger.info(f"split_payment: received payment {payment.payment_hash}, checking for split targets...")
     
-    # Skip if this is already a split payment or splitted payment
-    if (payment.extra.get("tag") == "split_payment" or 
-        payment.extra.get("splitted")):
-        logger.info(f"split_payment: skipping {payment.payment_hash} - already processed")
+    # Skip if this is already a splitted payment (not the original split payment)
+    if payment.extra.get("splitted"):
+        logger.info(f"split_payment: skipping {payment.payment_hash} - this is a splitted payment")
         return
     
     # Check if this payment has split targets
