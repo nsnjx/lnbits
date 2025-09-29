@@ -89,14 +89,18 @@ async def wait_for_split_payments():
 async def on_split_payment_paid(payment: Payment) -> None:
     """Handle split payment when invoice is paid"""
     
+    logger.info(f"split_payment: received payment {payment.payment_hash}, checking for split targets...")
+    
     # Skip if this is already a split payment or splitted payment
     if (payment.extra.get("tag") == "split_payment" or 
         payment.extra.get("splitted")):
+        logger.info(f"split_payment: skipping {payment.payment_hash} - already processed")
         return
     
     # Check if this payment has split targets
     split_targets = payment.extra.get("split_targets")
     if not split_targets:
+        logger.info(f"split_payment: no split targets found for {payment.payment_hash}")
         return
     
     total_percent = payment.extra.get("total_percent", 0)
@@ -105,9 +109,12 @@ async def on_split_payment_paid(payment: Payment) -> None:
         return
     
     logger.info(f"split_payment: processing split payment {payment.payment_hash} to {len(split_targets)} targets")
+    logger.info(f"split_payment: payment amount = {payment.amount} msats ({payment.amount // 1000} sats)")
+    logger.info(f"split_payment: split targets = {split_targets}")
     
     # Calculate priority-based split distribution
     split_results = calculate_priority_split(payment.amount, split_targets)
+    logger.info(f"split_payment: calculated results = {split_results}")
     
     # Process each target with calculated amounts
     for result in split_results:

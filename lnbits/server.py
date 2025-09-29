@@ -58,6 +58,7 @@ def main(
             ssl_keyfile=ssl_keyfile,
             ssl_certfile=ssl_certfile,
             reload=reload or False,
+            access_log=False,  # Disable access logs to reduce noise
         )
 
         server = uvicorn.Server(config=config)
